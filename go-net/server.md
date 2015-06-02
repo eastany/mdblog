@@ -45,7 +45,8 @@ type conn struct {
 	hijackedv    bool       // connection has been hijacked by handler
 }
 ```
-### conn #### 作为HTTP请求的连接定义，具体的属性如上
+### conn
+作为HTTP请求的连接定义，具体的属性如上
 
 
 
