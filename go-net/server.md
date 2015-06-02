@@ -48,7 +48,7 @@ type conn struct {
 ### conn
 作为HTTP请求的连接定义，具体的属性如上
 
-__func (c *conn) hijack() (rwc net.Conn, buf *bufio.ReadWriter, err error)__ 是链接劫持的具体实现，把Conn跟对应的buf导出，原conn响应的置空，调用者则接管了该连接。
+__func (c *conn) hijack() (rwc net.Conn, buf *bufio.ReadWriter, err error)__ 是链接劫持的具体实现，把Conn跟对应的buf导出，原conn相应的置空，调用者则接管了该连接。
 
 
 
