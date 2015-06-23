@@ -154,3 +154,32 @@ func (w *response) Header() Header {
 }
 ```
 
+
+```
+func (w *response) WriteHeader(code int) {
+	if w.conn.hijacked() {
+		w.conn.server.logf("http: response.WriteHeader on hijacked connection")
+		return
+	}
+	if w.wroteHeader {
+		w.conn.server.logf("http: multiple response.WriteHeader calls")
+		return
+	}
+	w.wroteHeader = true
+	w.status = code
+ 
+	if w.calledHeader && w.cw.header == nil {
+		w.cw.header = w.handlerHeader.clone()
+	}
+ 
+	if cl := w.handlerHeader.get("Content-Length"); cl != "" {
+		v, err := strconv.ParseInt(cl, 10, 64)
+		if err == nil && v >= 0 {
+			w.contentLength = v
+		} else {
+			w.conn.server.logf("http: invalid Content-Length of %q", cl)
+			w.handlerHeader.Del("Content-Length")
+		}
+	}
+}
+```
