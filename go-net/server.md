@@ -53,3 +53,104 @@ __func (c *conn) hijack() (rwc net.Conn, buf *bufio.ReadWriter, err error)__   �
 __func (c *conn) closeNotify() <-chan bool__   
 关闭通知，标记客户端已断开连接。具体实现为：复制一些未处理的数据，做收尾工作，
 
+__func (c *conn) noteClientGone()__
+标记客户端已断开。向close chan发送断开信号
+
+```
+type switchWriter struct {
+	io.Writer
+}
+```
+switchWriter可以在运行时改变Writer，所以并发写入并不安全
+
+```
+type liveSwitchReader struct {
+	sync.Mutex
+	r io.Reader
+}
+```
+liveSwitchReader可以在运行时改变Reader，如果持有锁的话，那么并发读就是安全的
+
+```
+type response struct {
+	conn          *conn
+	req           *Request // request for this response
+	wroteHeader   bool     // reply header has been (logically) written
+	wroteContinue bool     // 100 Continue response was written
+ 
+	w  *bufio.Writer // buffers output in chunks to chunkWriter
+	cw chunkWriter
+	sw *switchWriter // of the bufio.Writer, for return to putBufioWriter
+ 
+	// handlerHeader is the Header that Handlers get access to,
+	// which may be retained and mutated even after WriteHeader.
+	// handlerHeader is copied into cw.header at WriteHeader
+	// time, and privately mutated thereafter.
+	handlerHeader Header
+	calledHeader  bool // handler accessed handlerHeader via Header
+ 
+	written       int64 // number of bytes written in body
+	contentLength int64 // explicitly-declared Content-Length; or -1
+	status        int   // status code passed to WriteHeader
+	closeAfterReply bool
+	requestBodyLimitHit bool
+	trailers []string
+ 
+	handlerDone bool // set true when the handler exits
+ 
+	// Buffers for Date and Content-Length
+	dateBuf [len(TimeFormat)]byte
+	clenBuf [10]byte
+}
+```
+注释写的比较清楚，作为HTTP的响应。
+
+```
+// Read next request from connection.
+func (c *conn) readRequest() (w *response, err error) {
+	if c.hijacked() {	//如果已被劫持处理，则返回，出错
+		return nil, ErrHijacked
+	}
+ 
+	if d := c.server.ReadTimeout; d != 0 {	//设置读超时
+		c.rwc.SetReadDeadline(time.Now().Add(d))
+	}
+	if d := c.server.WriteTimeout; d != 0 {
+		defer func() {			 //用defer设置写超时，比较准确
+			c.rwc.SetWriteDeadline(time.Now().Add(d))
+		}()
+	}
+ 
+	c.lr.N = c.server.initialLimitedReaderSize()	// 初始化读的缓冲区长度
+	var req *Request
+	if req, err = ReadRequest(c.buf.Reader); err != nil {//读取请求
+		if c.lr.N == 0 {
+			return nil, errTooLarge
+		}
+		return nil, err
+	}
+	c.lr.N = noLimit  
+ 
+	req.RemoteAddr = c.remoteAddr
+	req.TLS = c.tlsState
+ 
+	w = &response{
+		conn:          c,
+		req:           req,
+		handlerHeader: make(Header),
+		contentLength: -1,
+	} //实例化响应对象
+	w.cw.res = w
+	w.w = newBufioWriterSize(&w.cw, bufferBeforeChunkingSize)
+	return w, nil
+}
+
+func (w *response) Header() Header {
+	if w.cw.header == nil && w.wroteHeader && !w.cw.wroteHeader {
+		w.cw.header = w.handlerHeader.clone()
+	}
+	w.calledHeader = true
+	return w.handlerHeader
+}
+```
+
