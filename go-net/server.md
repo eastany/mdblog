@@ -269,7 +269,7 @@ func (c *conn) serve() {
 			break
 		}
  
-		//把请求处理丢到goroutine中，并行处理
+		//把请求处理丢到goroutine中，并行处理, 所以这段函数调用是在goroutine中，参见Serve
 		serverHandler{c.server}.ServeHTTP(w, w.req)
 		if c.hijacked() {
 			return
@@ -282,6 +282,102 @@ func (c *conn) serve() {
 			break
 		}
 		c.setState(c.rwc, StateIdle)
+	}
+}
+```
+
+
+-----------
+```
+type ServeMux struct {
+	mu    sync.RWMutex
+	m     map[string]muxEntry
+	hosts bool // whether any patterns contain hostnames
+}
+type muxEntry struct {
+	explicit bool
+	h        Handler
+	pattern  string
+}
+```
+ServeMux是HTTP链接复用器，也就是路由表，定义请求的URL与处理handler的映射，长匹配优先级高于短匹配，
+
+下面这个函数做匹配
+```
+func (mux *ServeMux) match(path string) (h Handler, pattern string) {
+	var n = 0
+	for k, v := range mux.m {
+		if !pathMatch(k, path) {
+			continue
+		}
+		if h == nil || len(k) > n {
+			n = len(k)
+			h = v.h
+			pattern = v.pattern
+		}
+	}
+	return
+}
+```
+
+HTTP Server
+====
+```
+type Server struct {
+	Addr           string   
+	Handler        Handler      
+	ReadTimeout    time.Duration
+	WriteTimeout   time.Duration 
+	MaxHeaderBytes int           //头最大长度
+	TLSConfig      *tls.Config   //https配置
+ 
+	
+	TLSNextProto map[string]func(*Server, *tls.Conn, Handler)
+	ConnState func(net.Conn, ConnState)   //一个很常用的编码规范，可以借鉴。设置连接状态
+	ErrorLog *log.Logger
+	disableKeepAlives int32 // accessed atomically.
+}
+
+func (srv *Server) ListenAndServe() error {
+	addr := srv.Addr
+	if addr == "" {
+		addr = ":http"
+	}
+	ln, err := net.Listen("tcp", addr)   //开始监听
+	if err != nil {
+		return err
+	}
+	return srv.Serve(tcpKeepAliveListener{ln.(*net.TCPListener)})  //调用Serve函数,看下面
+}
+
+func (srv *Server) Serve(l net.Listener) error {
+	defer l.Close()
+	var tempDelay time.Duration // accept失败后sleep的时间
+	for {    //负责收连接，然后丢到协程中即可
+		rw, e := l.Accept()  //accept到请求
+		if e != nil {
+			if ne, ok := e.(net.Error); ok && ne.Temporary() {
+				if tempDelay == 0 {
+					tempDelay = 5 * time.Millisecond
+				} else {
+					tempDelay *= 2
+				}
+				if max := 1 * time.Second; tempDelay > max {
+					tempDelay = max
+				}
+				srv.logf("http: Accept error: %v; retrying in %v", e, tempDelay)
+				time.Sleep(tempDelay)
+				continue
+			}
+			return e
+		}
+		tempDelay = 0  //设置等待时间为0
+		c, err := srv.newConn(rw)   //新建连接对象
+		if err != nil {
+			continue
+		}
+		c.setState(c.rwc, StateNew) // before Serve can return
+		go c.serve()  //丢到协程中去处理
 	}
 }
 ```
