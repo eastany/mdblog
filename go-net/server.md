@@ -381,4 +381,4 @@ func (srv *Server) Serve(l net.Listener) error {
 	}
 }
 ```
-默认handler为nil的话，会使用DefaultMux，而调用http.HandlerFunc可以在DefaultMux注册一些路由信息。
+默认handler为nil的话，会使用DefaultMux，而调用http.HandlerFunc和http.handle可以在DefaultMux注册一些路由信息。
