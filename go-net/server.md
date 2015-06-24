@@ -183,3 +183,105 @@ func (w *response) WriteHeader(code int) {
 	}
 }
 ```
+
+
+```
+const rstAvoidanceDelay = 500 * time.Millisecond
+```
+rstAvoidanceDelay是在关闭socket之前关闭连接的写之后需要等待的时间，可以让客户端收到FIN报文，并且可以处理收到RST请求报文时的未处理数据。RST在BSD系统中出现
+
+```
+// Serve a new connection.
+func (c *conn) serve() {
+	origConn := c.rwc // copy it before it's set nil on Close or Hijack
+	defer func() {
+		if err := recover(); err != nil {   //捕获异常
+			const size = 64 << 10
+			buf := make([]byte, size)
+			buf = buf[:runtime.Stack(buf, false)]    //保存当前goroutine的堆栈信息
+			c.server.logf("http: panic serving %v: %v\n%s", c.remoteAddr, err, buf)
+		}
+		if !c.hijacked() { //如果没有被接管，则关闭链接做处理
+			c.close()
+			c.setState(origConn, StateClosed)
+		}
+	}()
+ 
+	if tlsConn, ok := c.rwc.(*tls.Conn); ok {
+		//如果时HTTPS的链接
+		if d := c.server.ReadTimeout; d != 0 {
+			c.rwc.SetReadDeadline(time.Now().Add(d))
+		}
+		if d := c.server.WriteTimeout; d != 0 {
+			c.rwc.SetWriteDeadline(time.Now().Add(d))
+		}
+		if err := tlsConn.Handshake(); err != nil {
+			c.server.logf("http: TLS handshake error from %s: %v", c.rwc.RemoteAddr(), err)
+			return
+		}
+		c.tlsState = new(tls.ConnectionState)
+		*c.tlsState = tlsConn.ConnectionState()
+		if proto := c.tlsState.NegotiatedProtocol; validNPN(proto) {
+			if fn := c.server.TLSNextProto[proto]; fn != nil {
+				h := initNPNRequest{tlsConn, serverHandler{c.server}}
+				fn(c.server, tlsConn, h)
+			}
+			return
+		}
+	}
+ 
+	for {	//主循环体，负责接收请求
+		w, err := c.readRequest()  //收到请求w
+		if c.lr.N != c.server.initialLimitedReaderSize() {
+			// If we read any bytes off the wire, we're active.
+			c.setState(c.rwc, StateActive)
+		}
+		if err != nil {
+			//接收请求出错
+			if err == errTooLarge {  //请求过大，直接返回413
+				// Their HTTP client may or may not be
+				// able to read this if we're
+				// responding to them and hanging up
+				// while they're still writing their
+				// request.  Undefined behavior.
+				io.WriteString(c.rwc, "HTTP/1.1 413 Request Entity Too Large\r\n\r\n")
+				c.closeWriteAndWait()
+				break
+			} else if err == io.EOF { //结束字符
+				break // Don't reply
+			} else if neterr, ok := err.(net.Error); ok && neterr.Timeout() {
+				break // Don't reply
+			}
+			io.WriteString(c.rwc, "HTTP/1.1 400 Bad Request\r\n\r\n")
+			break
+		}
+ 
+		// 支持100-continue
+		req := w.req
+		if req.expectsContinue() { //
+			if req.ProtoAtLeast(1, 1) && req.ContentLength != 0 {
+				// Wrap the Body reader with one that replies on the connection
+				req.Body = &expectContinueReader{readCloser: req.Body, resp: w}
+			}
+			req.Header.Del("Expect")
+		} else if req.Header.get("Expect") != "" {
+			w.sendExpectationFailed()
+			break
+		}
+ 
+		//把请求处理丢到goroutine中，并行处理
+		serverHandler{c.server}.ServeHTTP(w, w.req)
+		if c.hijacked() {
+			return
+		}
+		w.finishRequest()
+		if w.closeAfterReply {
+			if w.requestBodyLimitHit {
+				c.closeWriteAndWait()
+			}
+			break
+		}
+		c.setState(c.rwc, StateIdle)
+	}
+}
+```
