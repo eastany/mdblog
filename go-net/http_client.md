@@ -170,7 +170,7 @@ WaitResponse:
 			pc.close()
 			re = responseAndError{err: errTimeout}
 			break WaitResponse
-		case re = <-resc:
+		case re = <-resc://收到应答
 			break WaitResponse
 		}
 	}
