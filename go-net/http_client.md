@@ -92,40 +92,38 @@ func (t *Transport) RoundTrip(req *Request) (resp *Response, err error) {
 	// 从缓存中获取连接
 	pconn, err := t.getConn(req, cm)
 	if err != nil {
-		t.setReqCanceler(req, nil)
+		t.setReqCanceler(req, nil)  //失败后，设置取消回调函数
 		req.closeBody()
 		return nil, err
 	}
  
-	return pconn.roundTrip(treq)
+	return pconn.roundTrip(treq) //调用连接的处理函数，如下
 }
 
 func (pc *persistConn) roundTrip(req *transportRequest) (resp *Response, err error) {
-	pc.t.setReqCanceler(req.Request, pc.cancelRequest)
-	pc.lk.Lock()
+	pc.t.setReqCanceler(req.Request, pc.cancelRequest) //设置取消回调
+	pc.lk.Lock()  //计数增加
 	pc.numExpectedResponses++
 	headerFn := pc.mutateHeaderFunc
 	pc.lk.Unlock()
  
-	if headerFn != nil {
+	if headerFn != nil {  //如果头处理函数不为空，则处理头
 		headerFn(req.extraHeaders())
 	}
-	requestedGzip := false
+	requestedGzip := false   //GZIP压缩处理逻辑
 	if !pc.t.DisableCompression &&
 		req.Header.Get("Accept-Encoding") == "" &&
 		req.Header.Get("Range") == "" &&
-		req.Method != "HEAD" {
+		req.Method != "HEAD" {   //如果启用压缩，且请求头中无Accept-Encoding和Range声明，请求方法不是HEAD，则默认开启GZIP
 		requestedGzip = true
 		req.extraHeaders().Set("Accept-Encoding", "gzip")
 	}
  
-	if pc.t.DisableKeepAlives {
+	if pc.t.DisableKeepAlives { //如果未启用场链接，则设置链接close
 		req.extraHeaders().Set("Connection", "close")
 	}
  
-	// Write the request concurrently with waiting for a response,
-	// in case the server decides to reply before reading our full
-	// request body.
+	// 边写边等待应答，避免服务器在读完请求之前就返回.这里可以学习学习实现
 	writeErrCh := make(chan error, 1)
 	pc.writech <- writeRequest{req, writeErrCh}
  
