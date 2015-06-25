@@ -11,6 +11,7 @@ type Client struct {
 }
 ```
 RoundTripper为请求接口,具体实现函数是RoundTrip，
+在http包中实现RoundTripper接口的是Transport，定义了HTTP的连接建立与数据传输等。Transport的下一层是persistConn，persistConn实现了对连接的封装
 
 ```
 type Transport struct {
