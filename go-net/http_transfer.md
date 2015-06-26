@@ -98,3 +98,49 @@ func newTransferWriter(r interface{}) (t *transferWriter, err error) {
 	return t, nil
 }
 ```
+TransferWriter 写Header
+```
+func (t *transferWriter) WriteHeader(w io.Writer) error {
+	if t.Close {
+		if _, err := io.WriteString(w, "Connection: close\r\n"); err != nil {
+			return err
+		}
+	}
+	if t.shouldSendContentLength() {
+		if _, err := io.WriteString(w, "Content-Length: "); err != nil {
+			return err
+		}
+		if _, err := io.WriteString(w, strconv.FormatInt(t.ContentLength, 10)+"\r\n"); err != nil {
+			return err
+		}
+	} else if chunked(t.TransferEncoding) {
+		//分片
+		if _, err := io.WriteString(w, "Transfer-Encoding: chunked\r\n"); err != nil {
+			return err
+		}
+	}
+ 
+	// Write Trailer header
+	if t.Trailer != nil {
+		keys := make([]string, 0, len(t.Trailer))
+		for k := range t.Trailer {
+			k = CanonicalHeaderKey(k)
+			switch k {
+			case "Transfer-Encoding", "Trailer", "Content-Length":
+				return &badStringError{"invalid Trailer key", k}
+			}
+			keys = append(keys, k)
+		}
+		if len(keys) > 0 {
+			sort.Strings(keys)
+			// TODO: could do better allocation-wise here, but trailers are rare,
+			// so being lazy for now.
+			if _, err := io.WriteString(w, "Trailer: "+strings.Join(keys, ",")+"\r\n"); err != nil {
+				return err
+			}
+		}
+	}
+ 
+	return nil
+}
+```
