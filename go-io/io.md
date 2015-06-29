@@ -37,4 +37,20 @@ type ReadSeeker interface {
 }
 ```
 ...等等
+对读写接口的二次封装接口
+```
+type ReaderFrom interface {
+	ReadFrom(r Reader) (n int64, err error)
+}
+type WriterTo interface {
+	WriteTo(w Writer) (n int64, err error)
+}
+type ReaderAt interface {
+	ReadAt(p []byte, off int64) (n int, err error)
+}
+type WriterAt interface {
+	WriteAt(p []byte, off int64) (n int, err error)
+}
+```
+
 
