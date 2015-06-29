@@ -136,10 +136,12 @@ func Copy(dst Writer, src Reader) (written int64, err error) {
 	}
 	return written, err
 }
-
-
-
 ```
+
+Seek(off,off_type) off_type=0是从开始算起偏移，1是从你当前算偏移，2是从结尾开始算偏移。
+
+
+
 
 
 
