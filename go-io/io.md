@@ -140,9 +140,76 @@ func Copy(dst Writer, src Reader) (written int64, err error) {
 
 Seek(off,off_type) off_type=0是从开始算起偏移，1是从你当前算偏移，2是从结尾开始算偏移。
 
+PIPE
+--------
+```
+type pipe struct {
+	rl    sync.Mutex // gates readers one at a time
+	wl    sync.Mutex // gates writers one at a time
+	l     sync.Mutex // protects remaining fields
+	data  []byte     // data remaining in pending write
+	rwait sync.Cond  // waiting reader
+	wwait sync.Cond  // waiting writer
+	rerr  error      // if reader closed, error to give writes
+	werr  error      // if writer closed, error to give reads
+}
 
+func (p *pipe) read(b []byte) (n int, err error) {
+	// One reader at a time.
+	p.rl.Lock()
+	defer p.rl.Unlock()
+ 
+	p.l.Lock()
+	defer p.l.Unlock()
+	for {   //阻塞等待
+		if p.rerr != nil {
+			return 0, ErrClosedPipe
+		}
+		if p.data != nil {  //有数据来了，跳出循环
+			break
+		}
+		if p.werr != nil {
+			return 0, p.werr
+		}
+		p.rwait.Wait() 
+	}
+	n = copy(b, p.data)
+	p.data = p.data[n:]
+	if len(p.data) == 0 {
+		p.data = nil
+		p.wwait.Signal() //通知写端
+	}
+	return
+}
+```
+func (p *pipe) write(b []byte) (n int, err error) 同read
 
+PipeReader是对pipe的包装，实现了Reader接口
+PipeWriter是对pipe的包装，实现了Writer接口
 
+```
+func Pipe() (*PipeReader, *PipeWriter) {
+	p := new(pipe)
+	p.rwait.L = &p.l
+	p.wwait.L = &p.l
+	r := &PipeReader{p}
+	w := &PipeWriter{p}
+	return r, w
+}
+```
+因为pipe是带锁的所以支持安全的并发读写。
 
+MultiReader是对多个Reader的逻辑连接，读取的时候按顺序读取
+```
+func MultiReader(readers ...Reader) Reader {
+	r := make([]Reader, len(readers))
+	copy(r, readers)
+	return &multiReader{r}
+}
+```
 
-
+DEVNULL  io.util.Discard是/dev/null
+-------
+```
+var Discard io.Writer = devNull(0)
+```
